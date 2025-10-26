@@ -1,236 +1,251 @@
 local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService") -- For Drag and Drop GUI
 
 local player = Players.LocalPlayer
 local character
-local humanoid
+local humanoidRootPart
 
--- GUI Setup (Взято из красивого кода)
-local mainGUI = Instance.new("ScreenGui")
-mainGUI.Name = "TriOX_FlyGUI"
-mainGUI.ResetOnSpawn = false
-mainGUI.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+-- Function to get the character and HumanoidRootPart
+local function getCharacterAndHumanoidRootPart()
+    character = player.Character
+    if not character then
+        character = player.CharacterAdded:Wait()
+    end
+    humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+end
 
--- Define Colors and Theme (Взято из красивого кода)
+getCharacterAndHumanoidRootPart() -- Initial call
+
+-- Connect to the character added event (after death/respawn)
+player.CharacterAdded:Connect(function(char)
+    character = char
+    humanoidRootPart = char:WaitForChild("HumanoidRootPart")
+    -- If there was active highlighting, clear it on respawn
+    cleanupExistingHighlights()
+end)
+
+-- Stored values
+local highlightTarget = "Items" -- Default value
+local currentHighlightColor = Color3.fromRGB(0, 255, 0)
+local currentBillboardOffset = Vector3.new(0, 3, 0) -- Default offset for Billboard
+
+-- Toggle settings
+local showDistance = true
+local showName = true
+
+-- Highlighting functionality
+local activeHighlights = {} -- Stores active highlights for cleanup
+local activeBillboards = {} -- Stores active BillboardGuis for cleanup
+local heartbeatConnection = nil -- Connection for Heartbeat
+
+local function cleanupExistingHighlights()
+    if heartbeatConnection then
+        heartbeatConnection:Disconnect()
+        heartbeatConnection = nil
+    end
+
+    for _, highlight in pairs(activeHighlights) do
+        if highlight and highlight.Parent then
+            highlight:Destroy()
+        end
+    end
+    table.clear(activeHighlights)
+
+    for _, billboard in pairs(activeBillboards) do
+        if billboard and billboard.Parent then
+            billboard:Destroy()
+        end
+    end
+    table.clear(activeBillboards)
+    print("Existing highlights cleared.")
+end
+
+local function createBillboard(item, distanceText, offset)
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "ItemInfo"
+    billboard.Adornee = item
+    billboard.Size = UDim2.new(0, 200, 0, 50)
+    billboard.StudsOffset = offset
+    billboard.AlwaysOnTop = true
+    billboard.LightInfluence = 0
+    billboard.MaxDistance = 100 -- Make configurable in the future?
+
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Name = "TextLabel"
+    textLabel.Size = UDim2.new(1, 0, 1, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.Text = distanceText
+    textLabel.TextColor3 = Color3.new(1, 1, 1)
+    textLabel.TextStrokeTransparency = 0
+    textLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+    textLabel.Font = Enum.Font.SourceSansBold
+    textLabel.TextSize = 14
+    textLabel.Parent = billboard
+
+    billboard.Parent = item
+    return billboard
+end
+
+local function highlightItem(item, color)
+    if not item:IsA("BasePart") then return end
+
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "ItemHighlight"
+    highlight.FillColor = color
+    highlight.OutlineColor = color
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Parent = item
+    return highlight
+end
+
+local function applyHighlighting()
+    cleanupExistingHighlights()
+    local itemsToHighlight = {}
+
+    if highlightTarget == "" then
+        warn("Highlight target not specified.")
+        return
+    end
+
+    -- Attempt to find the object by full path (e.g., workspace.Items)
+    local foundObject = game:GetService("Workspace"):FindFirstChild(highlightTarget)
+
+    if foundObject then
+        if foundObject:IsA("Model") or foundObject:IsA("Folder") then
+            for _, item in ipairs(foundObject:GetDescendants()) do
+                if item:IsA("BasePart") then
+                    table.insert(itemsToHighlight, item)
+                end
+            end
+        elseif foundObject:IsA("BasePart") then
+            table.insert(itemsToHighlight, foundObject)
+        end
+    else
+        -- If not found by full path, search by partial name among all BaseParts
+        local lowerCaseTarget = string.lower(highlightTarget)
+        for _, obj in pairs(game:GetService("Workspace"):GetDescendants()) do
+            if obj:IsA("BasePart") and string.find(string.lower(obj.Name), lowerCaseTarget, 1, true) then
+                table.insert(itemsToHighlight, obj)
+            end
+        end
+    end
+
+    if #itemsToHighlight == 0 then
+        warn("No items found to highlight with name/path '" .. highlightTarget .. "'.")
+        return
+    end
+
+    for _, item in ipairs(itemsToHighlight) do
+        local highlight = highlightItem(item, currentHighlightColor)
+        table.insert(activeHighlights, highlight)
+
+        if humanoidRootPart then
+            local distance = (humanoidRootPart.Position - item.Position).Magnitude
+            local distanceText = ""
+            
+            if showName and showDistance then
+                distanceText = string.format("%s\n%.2f studs", item.Name, distance)
+            elseif showName then
+                distanceText = item.Name
+            elseif showDistance then
+                distanceText = string.format("%.2f studs", distance)
+            end
+            
+            if showName or showDistance then
+                local billboard = createBillboard(item, distanceText, currentBillboardOffset)
+                table.insert(activeBillboards, billboard)
+            end
+        end
+    end
+
+    print("Highlight applied to " .. #itemsToHighlight .. " items.")
+
+    if #itemsToHighlight > 0 and not heartbeatConnection then
+        heartbeatConnection = RunService.Heartbeat:Connect(function()
+            if humanoidRootPart and character and character.Parent then
+                for i = #activeBillboards, 1, -1 do
+                    local billboard = activeBillboards[i]
+                    if billboard and billboard.Adornee and billboard.Adornee:IsA("BasePart") and billboard.Adornee.Parent then
+                        local item = billboard.Adornee
+                        local distance = (humanoidRootPart.Position - item.Position).Magnitude
+                        
+                        local newText = ""
+                        if showName and showDistance then
+                            newText = string.format("%s\n%.2f studs", item.Name, distance)
+                        elseif showName then
+                            newText = item.Name
+                        elseif showDistance then
+                            newText = string.format("%.2f studs", distance)
+                        end
+                        
+                        billboard.TextLabel.Text = newText
+                    else
+                        if billboard and billboard.Parent then
+                            billboard:Destroy()
+                        end
+                        if activeHighlights[i] and activeHighlights[i].Parent then
+                            activeHighlights[i]:Destroy()
+                        end
+                        table.remove(activeBillboards, i)
+                        table.remove(activeHighlights, i)
+                    end
+                end
+            else
+                cleanupExistingHighlights()
+            end
+        end)
+    end
+end
+
+-- GUI
+local highlightGUI = Instance.new("ScreenGui")
+highlightGUI.Name = "TriOX_ItemHighlight_GUI"
+highlightGUI.ResetOnSpawn = false
+highlightGUI.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+highlightGUI.Parent = player:WaitForChild("PlayerGui")
+
 local colorSequence = {
-    Color3.fromRGB(148, 0, 211),  -- Violet
-    Color3.fromRGB(255, 165, 0),   -- Orange
-    Color3.fromRGB(255, 105, 180), -- Pink
-    Color3.fromRGB(0, 191, 255)    -- Blue
+    Color3.fromRGB(148, 0, 211),
+    Color3.fromRGB(255, 165, 0),
+    Color3.fromRGB(255, 105, 180),
+    Color3.fromRGB(0, 191, 255)
 }
 local currentColorIndex = 1
 local colorTransitionTime = 2
-local flyTitleLabel = nil -- Reference to the title label for color animation
-
 local currentTheme = "Dark"
+
 local themes = {
     Dark = {
         Background = Color3.fromRGB(40, 40, 40),
         Header = Color3.fromRGB(30, 30, 30),
         Button = Color3.fromRGB(60, 60, 60),
-        ButtonHover = Color3.fromRGB(80, 80, 80),
         Text = Color3.fromRGB(255, 255, 255),
-        CloseButton = Color3.fromRGB(200, 50, 50)
-    },
-    Light = {
-        Background = Color3.fromRGB(240, 240, 240),
-        Header = Color3.fromRGB(220, 220, 220),
-        Button = Color3.fromRGB(200, 200, 200),
-        ButtonHover = Color3.fromRGB(180, 180, 180),
-        Text = Color3.fromRGB(0, 0, 0),
-        CloseButton = Color3.fromRGB(255, 100, 100)
+        CloseButton = Color3.fromRGB(200, 50, 50),
+        InputBackground = Color3.fromRGB(50, 50, 50)
     }
 }
 
--- Apply theme function (Взято из красивого кода)
-local function applyTheme(theme, gui)
-    local colors = themes[(theme == "Dark" and "Dark") or "Light"]
-    for _, element in pairs(gui:GetDescendants()) do
-        if element:IsA("Frame") then
-            if element.Name == "Header" then
-                element.BackgroundColor3 = colors.Header
-            else
-                element.BackgroundColor3 = colors.Background
-            end
-        elseif element:IsA("TextButton") or element:IsA("TextLabel") then
-            element.TextColor3 = colors.Text
-            if element:IsA("TextButton") then
-                if element.Name == "CloseButton" then
-                    element.BackgroundColor3 = colors.CloseButton
-                else
-                    element.BackgroundColor3 = colors.Button
-                end
-            end
-        end
-    end
-end
-
--- Fly variables (Обновлено для работы с логикой "уродливого" кода)
-local flyEnabled = false -- Соответствует 'nowe' из старого кода
-local speeds = 1 -- Соответствует 'speeds' из старого кода
-local tpwalking = false -- Для управления циклом движения WASD
-
--- Fly functions (Адаптировано из "уродливого" кода)
-local function enableHumanoidStates()
-    local hum = character and character:FindFirstChildOfClass("Humanoid")
-    if hum then
-        -- Включаем все стандартные состояния
-        hum:SetStateEnabled(Enum.HumanoidStateType.Climbing,true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown,true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Flying,true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Freefall,true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp,true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Jumping,true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Landed,true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Physics,true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.PlatformStanding,true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll,true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Running,true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.RunningNoPhysics,true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Seated,true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.StrafingNoPhysics,true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Swimming,true)
-        hum:ChangeState(Enum.HumanoidStateType.RunningNoPhysics) -- Возвращаемся к нормальному состоянию
-        hum.PlatformStand = false -- Отключаем платформу
-
-        -- Восстанавливаем анимации
-        local animateScript = character:FindFirstChild("Animate")
-        if animateScript then
-            animateScript.Disabled = false
-        end
-        for _, track in pairs(hum:GetPlayingAnimationTracks()) do
-            track:AdjustSpeed(1)
-        end
-    end
-end
-
-local function disableHumanoidStates()
-    local hum = character and character:FindFirstChildOfClass("Humanoid")
-    if hum then
-        -- Отключаем почти все состояния
-        hum:SetStateEnabled(Enum.HumanoidStateType.Climbing,false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown,false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Flying,false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Freefall,false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp,false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Jumping,false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Landed,false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Physics,false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.PlatformStanding,false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll,false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Running,false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.RunningNoPhysics,false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Seated,false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.StrafingNoPhysics,false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Swimming,false)
-        hum:ChangeState(Enum.HumanoidStateType.Swimming) -- Чтобы избежать проблем с гравитацией
-        hum.PlatformStand = true -- Включаем платформу для парения
-
-        -- Отключаем анимации
-        local animateScript = character:FindFirstChild("Animate")
-        if animateScript then
-            animateScript.Disabled = true
-        end
-        for _, track in pairs(hum:GetPlayingAnimationTracks()) do
-            track:AdjustSpeed(0)
-        end
-    end
-end
-
-local function startFly()
-    if flyEnabled then return end -- Уже летим
-    flyEnabled = true
-
-    disableHumanoidStates()
-
-    -- Логика движения WASD из "уродливого" кода
-    tpwalking = true
-    for i = 1, speeds do -- Запускаем несколько потоков для стабильности, как в оригинале
-        spawn(function()
-            local hb = game:GetService("RunService").Heartbeat
-            local chr = player.Character
-            local hum = chr and chr:FindFirstChildOfClass("Humanoid")
-            while tpwalking and hb:Wait() and chr and hum and hum.Parent do
-                if hum.MoveDirection.Magnitude > 0 then
-                    chr:TranslateBy(hum.MoveDirection * speeds) -- Умножаем на speeds
-                end
-            end
-        end)
-    end
-
-    -- Логика BodyMovers для R6/R15 из "уродливого" кода (адаптирована)
-    -- Эта часть кода будет работать только если Character RigType R6/R15,
-    -- она является альтернативным способом управления движением.
-    -- Поскольку мы используем TranslateBy, эту часть можно убрать,
-    -- но я оставлю её как опцию, если TranslateBy будет нестабилен.
-    -- Я немного упростил её, убрав лишние переменные.
-    local rootPart = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso")
-    if rootPart then
-        local bg = Instance.new("BodyGyro", rootPart)
-        bg.P = 9e4
-        bg.maxTorque = Vector3.new(9e9, 9e9, 9e9)
-        bg.cframe = rootPart.CFrame
-
-        local bv = Instance.new("BodyVelocity", rootPart)
-        bv.velocity = Vector3.new(0,0.1,0)
-        bv.maxForce = Vector3.new(9e9, 9e9, 9e9)
-
-        -- В оригинале здесь был бесконечный цикл. Мы не будем его использовать,
-        -- так как это может конфликтовать с RenderStepped и TranslateBy.
-        -- Вместо этого, BodyMovers будут просто висеть, пока не будут уничтожены.
-        -- Однако, для WASD движения мы уже используем TranslateBy выше.
-        -- Поэтому, если вы хотите использовать BodyMovers для WASD,
-        -- вам нужно будет отключить TranslateBy и управлять bv.velocity здесь.
-        -- Для простоты, мы сфокусируемся на TranslateBy.
-    end
-end
-
-local function stopFly()
-    if not flyEnabled then return end -- Не летим
-    flyEnabled = false
-
-    tpwalking = false -- Останавливаем цикл движения WASD
-
-    enableHumanoidStates()
-
-    -- Удаляем BodyMovers, если они были созданы (из "уродливого" кода)
-    local rootPart = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso")
-    if rootPart then
-        local bg = rootPart:FindFirstChildOfClass("BodyGyro")
-        local bv = rootPart:FindFirstChildOfClass("BodyVelocity")
-        if bg then bg:Destroy() end
-        if bv then bv:Destroy() end
-    end
-end
-
-local function createFlyGUI()
-    character = player.Character or player.CharacterAdded:Wait()
-    humanoid = character:WaitForChild("Humanoid")
-    mainGUI.Parent = player:WaitForChild("PlayerGui")
-
-    -- Main Frame (Panel) (Взято из красивого кода)
+local function createDraggablePanel(titleText, width, height, parentGui)
     local panel = Instance.new("Frame")
-    panel.Name = "FlyPanel"
-    panel.Size = UDim2.new(0, 190, 0, 120)
-    panel.Position = UDim2.new(0.5, -95, 0.5, -60) -- Centered
-    panel.BackgroundColor3 = themes[currentTheme].Background
+    panel.Size = UDim2.new(0, width, 0, height)
+    panel.Position = UDim2.new(0.5, -width/2, 0.5, -height/2)
+    panel.BackgroundColor3 = themes["Dark"].Background
     panel.BorderSizePixel = 0
     panel.ClipsDescendants = true
     panel.Active = true
-    panel.Parent = mainGUI
+    panel.Draggable = true
+    panel.ZIndex = 2
+    panel.Parent = parentGui
 
     local corner = Instance.new("UICorner")
     corner.CornerRadius = UDim.new(0, 8)
     corner.Parent = panel
 
-    -- Header (Взято из красивого кода)
     local header = Instance.new("Frame")
     header.Name = "Header"
     header.Size = UDim2.new(1, 0, 0, 28)
-    header.Position = UDim2.new(0, 0, 0, 0)
-    header.BackgroundColor3 = themes[currentTheme].Header
+    header.BackgroundColor3 = themes["Dark"].Header
     header.BorderSizePixel = 0
     header.Parent = panel
 
@@ -243,287 +258,323 @@ local function createFlyGUI()
     title.Size = UDim2.new(0.8, 0, 1, 0)
     title.Position = UDim2.new(0, 5, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "TriOX Fly"
-    title.TextColor3 = colorSequence[1] -- Initial color
+    title.Text = titleText
+    title.TextColor3 = colorSequence[1]
     title.TextSize = 14
     title.Font = Enum.Font.GothamMedium
+    title.TextXAlignment = Enum.TextXAlignment.Left
     title.Parent = header
-    flyTitleLabel = title -- Set the global reference for color animation
 
-    -- Close Button (Взято из красивого кода)
     local closeBtn = Instance.new("TextButton")
     closeBtn.Name = "CloseButton"
     closeBtn.Size = UDim2.new(0, 28, 0, 28)
     closeBtn.Position = UDim2.new(1, -28, 0, 0)
-    closeBtn.BackgroundColor3 = themes[currentTheme].CloseButton
+    closeBtn.BackgroundColor3 = themes["Dark"].CloseButton
     closeBtn.Text = "X"
-    closeBtn.TextColor3 = themes[currentTheme].Text
+    closeBtn.TextColor3 = themes["Dark"].Text
     closeBtn.TextSize = 14
     closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.ZIndex = 3
     closeBtn.Parent = header
 
-    local closeCorner = Instance.new("UICorner")
-    closeCorner.CornerRadius = UDim.new(0, 8)
-    closeCorner.Parent = closeBtn
-
     closeBtn.MouseButton1Click:Connect(function()
-        stopFly() -- Это очистит всё
-        mainGUI:Destroy()
+        panel.Visible = false
+        cleanupExistingHighlights()
     end)
 
-    -- Draggable functionality (Взято из красивого кода)
-    local dragging = false
-    local dragStart = Vector2.new()
-    local startPos = UDim2.new()
-
-    header.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPos = panel.Position
-
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
-            end)
-        end
-    end)
-
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local delta = input.Position - dragStart
-            panel.Position = UDim2.new(
-                startPos.X.Scale,
-                startPos.X.Offset + delta.X,
-                startPos.Y.Scale,
-                startPos.Y.Offset + delta.Y
-            )
-        end
-    end)
-
-    -- Fly controls (positioned relative to panel) (Взято из красивого кода)
-    local flyToggleBtn = Instance.new("TextButton")
-    flyToggleBtn.Name = "FlyToggle"
-    flyToggleBtn.Parent = panel
-    flyToggleBtn.BackgroundColor3 = themes[currentTheme].Button
-    flyToggleBtn.Size = UDim2.new(0.35, 0, 0, 28)
-    flyToggleBtn.Position = UDim2.new(0.6, 0, 0.65, 0) -- Adjusted position
-    flyToggleBtn.Text = "Fly"
-    flyToggleBtn.TextColor3 = themes[currentTheme].Text
-    flyToggleBtn.TextSize = 14
-    flyToggleBtn.Font = Enum.Font.GothamMedium
-
-    local toggleCorner = Instance.new("UICorner")
-    toggleCorner.CornerRadius = UDim.new(0, 6)
-    toggleCorner.Parent = flyToggleBtn
-
-    local upBtn = Instance.new("TextButton")
-    upBtn.Name = "UpButton"
-    upBtn.Parent = panel
-    upBtn.BackgroundColor3 = themes[currentTheme].Button
-    upBtn.Size = UDim2.new(0.2, 0, 0, 28)
-    upBtn.Position = UDim2.new(0.05, 0, 0.3, 0)
-    upBtn.Text = "UP"
-    upBtn.TextColor3 = themes[currentTheme].Text
-    upBtn.TextSize = 14
-    upBtn.Font = Enum.Font.GothamMedium
-
-    local upCorner = Instance.new("UICorner")
-    upCorner.CornerRadius = UDim.new(0, 6)
-    upCorner.Parent = upBtn
-
-    local downBtn = Instance.new("TextButton")
-    downBtn.Name = "DownButton"
-    downBtn.Parent = panel
-    downBtn.BackgroundColor3 = themes[currentTheme].Button
-    downBtn.Size = UDim2.new(0.2, 0, 0, 28)
-    downBtn.Position = UDim2.new(0.05, 0, 0.65, 0)
-    downBtn.Text = "DOWN"
-    downBtn.TextColor3 = themes[currentTheme].Text
-    downBtn.TextSize = 14
-    downBtn.Font = Enum.Font.GothamMedium
-
-    local downCorner = Instance.new("UICorner")
-    downCorner.CornerRadius = UDim.new(0, 6)
-    downCorner.Parent = downBtn
-
-    local speedPlusBtn = Instance.new("TextButton")
-    speedPlusBtn.Name = "SpeedPlus"
-    speedPlusBtn.Parent = panel
-    speedPlusBtn.BackgroundColor3 = themes[currentTheme].Button
-    speedPlusBtn.Size = UDim2.new(0.2, 0, 0, 28)
-    speedPlusBtn.Position = UDim2.new(0.3, 0, 0.3, 0)
-    speedPlusBtn.Text = "+"
-    speedPlusBtn.TextColor3 = themes[currentTheme].Text
-    speedPlusBtn.TextSize = 18
-    speedPlusBtn.Font = Enum.Font.GothamMedium
-
-    local plusCorner = Instance.new("UICorner")
-    plusCorner.CornerRadius = UDim.new(0, 6)
-    plusCorner.Parent = speedPlusBtn
-
-    local speedMinusBtn = Instance.new("TextButton")
-    speedMinusBtn.Name = "SpeedMinus"
-    speedMinusBtn.Parent = panel
-    speedMinusBtn.BackgroundColor3 = themes[currentTheme].Button
-    speedMinusBtn.Size = UDim2.new(0.2, 0, 0, 28)
-    speedMinusBtn.Position = UDim2.new(0.3, 0, 0.65, 0)
-    speedMinusBtn.Text = "-"
-    speedMinusBtn.TextColor3 = themes[currentTheme].Text
-    speedMinusBtn.TextSize = 18
-    speedMinusBtn.Font = Enum.Font.GothamMedium
-
-    local minusCorner = Instance.new("UICorner")
-    minusCorner.CornerRadius = UDim.new(0, 6)
-    minusCorner.Parent = speedMinusBtn
-
-    local speedLabel = Instance.new("TextLabel")
-    speedLabel.Name = "SpeedLabel"
-    speedLabel.Parent = panel
-    speedLabel.BackgroundColor3 = themes[currentTheme].Background
-    speedLabel.BackgroundTransparency = 0
-    speedLabel.Size = UDim2.new(0.2, 0, 0, 28)
-    speedLabel.Position = UDim2.new(0.6, 0, 0.3, 0)
-    speedLabel.Text = tostring(speeds) -- Отображаем текущую скорость
-    speedLabel.TextColor3 = themes[currentTheme].Text
-    speedLabel.TextSize = 14
-    speedLabel.Font = Enum.Font.GothamMedium
-
-    local speedLabelCorner = Instance.new("UICorner")
-    speedLabelCorner.CornerRadius = UDim.new(0, 6)
-    speedLabelCorner.Parent = speedLabel
-
-    -- Обработчики кнопок (Адаптировано для логики "уродливого" кода)
-    local upHoldConnection = nil
-    local downHoldConnection = nil
-
-    flyToggleBtn.MouseButton1Click:Connect(function()
-        if not flyEnabled then
-            startFly()
-            flyToggleBtn.Text = "Stop Fly"
-            flyToggleBtn.BackgroundColor3 = themes[currentTheme].CloseButton
-        else
-            stopFly()
-            flyToggleBtn.Text = "Fly"
-            flyToggleBtn.BackgroundColor3 = themes[currentTheme].Button
-        end
-    end)
-
-    upBtn.MouseButton1Down:Connect(function()
-        if flyEnabled then
-            upHoldConnection = RunService.Heartbeat:Connect(function()
-                if character and character:FindFirstChild("HumanoidRootPart") then
-                    character.HumanoidRootPart.CFrame = character.HumanoidRootPart.CFrame * CFrame.new(0, 1 * speeds, 0) -- Умножаем на speeds
-                end
-            end)
-        end
-    end)
-    upBtn.MouseButton1Up:Connect(function()
-        if upHoldConnection then
-            upHoldConnection:Disconnect()
-            upHoldConnection = nil
-        end
-    end)
-    upBtn.MouseLeave:Connect(function()
-        if upHoldConnection then
-            upHoldConnection:Disconnect()
-            upHoldConnection = nil
-        end
-    end)
-
-    downBtn.MouseButton1Down:Connect(function()
-        if flyEnabled then
-            downHoldConnection = RunService.Heartbeat:Connect(function()
-                if character and character:FindFirstChild("HumanoidRootPart") then
-                    character.HumanoidRootPart.CFrame = character.HumanoidRootPart.CFrame * CFrame.new(0, -1 * speeds, 0) -- Умножаем на speeds
-                end
-            end)
-        end
-    end)
-    downBtn.MouseButton1Up:Connect(function()
-        if downHoldConnection then
-            downHoldConnection:Disconnect()
-            downHoldConnection = nil
-        end
-    end)
-    downBtn.MouseLeave:Connect(function()
-        if downHoldConnection then
-            downHoldConnection:Disconnect()
-            downHoldConnection = nil
-        end
-    end)
-
-    speedPlusBtn.MouseButton1Click:Connect(function()
-        speeds = speeds + 1
-        speedLabel.Text = tostring(speeds)
-        -- Перезапускаем циклы TranslateBy для применения новой скорости
-        if flyEnabled then
-            tpwalking = false
-            startFly() -- Перезапустит логику движения с новой скоростью
-        end
-    end)
-
-    speedMinusBtn.MouseButton1Click:Connect(function()
-        if speeds > 1 then
-            speeds = speeds - 1
-            speedLabel.Text = tostring(speeds)
-            -- Перезапускаем циклы TranslateBy для применения новой скорости
-            if flyEnabled then
-                tpwalking = false
-                startFly() -- Перезапустит логику движения с новой скоростью
-            end
-        else
-            warn("Fly speed cannot be less than 1")
-            speedLabel.Text = 'min speed'
-            task.wait(1)
-            speedLabel.Text = tostring(speeds)
-        end
-    end)
-
-    -- Initial theme application
-    applyTheme(currentTheme, mainGUI)
+    return panel, title
 end
 
--- Animate title color (runs continuously as long as GUI exists) (Взято из красивого кода)
+local highlightPanel, highlightTitleLabel = createDraggablePanel("TriOX Highlight", 200, 280, highlightGUI) -- Increased height for new buttons
+highlightPanel.Visible = true
+
+local contentFrame = Instance.new("Frame")
+contentFrame.Name = "ContentFrame"
+contentFrame.Size = UDim2.new(1, -10, 1, -40)
+contentFrame.Position = UDim2.new(0, 5, 0, 35)
+contentFrame.BackgroundTransparency = 1
+contentFrame.Parent = highlightPanel
+
+local listLayout = Instance.new("UIListLayout")
+listLayout.Padding = UDim.new(0, 5)
+listLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+listLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+listLayout.Parent = contentFrame
+
+local pathLabel = Instance.new("TextLabel")
+pathLabel.Size = UDim2.new(1, 0, 0, 18)
+pathLabel.BackgroundTransparency = 1
+pathLabel.TextColor3 = themes[currentTheme].Text
+pathLabel.Text = "Path / Partial Name:"
+pathLabel.TextSize = 12
+pathLabel.Font = Enum.Font.GothamMedium
+pathLabel.TextXAlignment = Enum.TextXAlignment.Left
+pathLabel.Parent = contentFrame
+
+local pathTextBox = Instance.new("TextBox")
+pathTextBox.Name = "PathTextBox"
+pathTextBox.Size = UDim2.new(1, 0, 0, 24)
+pathTextBox.PlaceholderText = "e.g., Items or Sword"
+pathTextBox.Text = highlightTarget
+pathTextBox.BackgroundColor3 = themes[currentTheme].InputBackground
+pathTextBox.TextColor3 = themes[currentTheme].Text
+pathTextBox.TextSize = 12
+pathTextBox.Font = Enum.Font.SourceSans
+pathTextBox.TextXAlignment = Enum.TextXAlignment.Left
+pathTextBox.BorderSizePixel = 0
+pathTextBox.Parent = contentFrame
+
+pathTextBox.Changed:Connect(function(property)
+    if property == "Text" then
+        highlightTarget = pathTextBox.Text
+    end
+end)
+
+local rgbInputFrame = Instance.new("Frame")
+rgbInputFrame.Size = UDim2.new(1, 0, 0, 40)
+rgbInputFrame.BackgroundTransparency = 1
+rgbInputFrame.Parent = contentFrame
+
+local horizontalListLayout = Instance.new("UIListLayout")
+horizontalListLayout.FillDirection = Enum.FillDirection.Horizontal
+horizontalListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+horizontalListLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+horizontalListLayout.Padding = UDim.new(0, 5)
+horizontalListLayout.Parent = rgbInputFrame
+
+local rgbTextBoxesFrame = Instance.new("Frame")
+rgbTextBoxesFrame.Size = UDim2.new(0.65, 0, 1, 0)
+rgbTextBoxesFrame.BackgroundTransparency = 1
+rgbTextBoxesFrame.Parent = rgbInputFrame
+
+local rgbTextBoxesListLayout = Instance.new("UIListLayout")
+rgbTextBoxesListLayout.FillDirection = Enum.FillDirection.Vertical
+rgbTextBoxesListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+rgbTextBoxesListLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+rgbTextBoxesListLayout.Padding = UDim.new(0, 2)
+rgbTextBoxesListLayout.Parent = rgbTextBoxesFrame
+
+local colorActualSquare
+local rTextBox, gTextBox, bTextBox -- Объявляем здесь, чтобы они были доступны в updateColorPreview
+
+local function updateColorPreview()
+    -- Проверяем, что все TextBox'ы существуют
+    if rTextBox and gTextBox and bTextBox then
+        local r = tonumber(rTextBox.Text) or 0
+        local g = tonumber(gTextBox.Text) or 0
+        local b = tonumber(bTextBox.Text) or 0
+        
+        currentHighlightColor = Color3.fromRGB(math.floor(r), math.floor(g), math.floor(b))
+        
+        if colorActualSquare then
+            colorActualSquare.BackgroundColor3 = currentHighlightColor
+        end
+    end
+end
+
+local rValue = currentHighlightColor.R * 255
+local gValue = currentHighlightColor.G * 255
+local bValue = currentHighlightColor.B * 255
+
+local function createRGBInput(name, initialValue, parentFrame)
+    local inputFrame = Instance.new("Frame")
+    inputFrame.Size = UDim2.new(1, 0, 0, 12)
+    inputFrame.BackgroundTransparency = 1
+    inputFrame.Parent = parentFrame
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0.15, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = themes[currentTheme].Text
+    label.Text = name .. ":"
+    label.TextSize = 10
+    label.Font = Enum.Font.GothamMedium
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = inputFrame
+
+    local textBox = Instance.new("TextBox")
+    textBox.Name = name .. "TextBox"
+    textBox.Size = UDim2.new(0.85, 0, 1, 0)
+    textBox.Position = UDim2.new(0.15, 0, 0, 0)
+    textBox.Text = tostring(initialValue)
+    textBox.BackgroundColor3 = themes[currentTheme].InputBackground
+    textBox.TextColor3 = themes[currentTheme].Text
+    textBox.TextSize = 10
+    textBox.Font = Enum.Font.SourceSans
+    textBox.TextXAlignment = Enum.TextXAlignment.Center
+    textBox.BorderSizePixel = 0
+    textBox.Parent = inputFrame
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 3)
+    corner.Parent = textBox
+
+    textBox.FocusLost:Connect(function()
+        local value = tonumber(textBox.Text)
+        if value then
+            value = math.clamp(value, 0, 255)
+            textBox.Text = tostring(math.floor(value))
+        else
+            if name == "R" then textBox.Text = tostring(rValue) end
+            if name == "G" then textBox.Text = tostring(gValue) end
+            if name == "B" then textBox.Text = tostring(bValue) end
+        end
+
+        -- Обновляем внутренние значения (если rTextBox, gTextBox, bTextBox уже существуют)
+        if rTextBox and gTextBox and bTextBox then
+             rValue = tonumber(rTextBox.Text) or rValue
+             gValue = tonumber(gTextBox.Text) or gValue
+             bValue = tonumber(bTextBox.Text) or bValue
+        end
+
+        updateColorPreview()
+    end)
+
+    return textBox
+end
+
+rTextBox = createRGBInput("R", rValue, rgbTextBoxesFrame)
+gTextBox = createRGBInput("G", gValue, rgbTextBoxesFrame)
+bTextBox = createRGBInput("B", bValue, rgbTextBoxesFrame)
+
+local colorPreviewSquare = Instance.new("Frame")
+colorPreviewSquare.Name = "ColorPreview"
+colorPreviewSquare.Size = UDim2.new(0.3, 0, 1, 0)
+colorPreviewSquare.BackgroundTransparency = 1
+colorPreviewSquare.Parent = rgbInputFrame
+
+colorActualSquare = Instance.new("Frame")
+colorActualSquare.Size = UDim2.new(0.9, 0, 0.9, 0)
+colorActualSquare.Position = UDim2.new(0.5, 0, 0.5, 0)
+colorActualSquare.AnchorPoint = Vector2.new(0.5, 0.5)
+colorActualSquare.BackgroundColor3 = currentHighlightColor
+colorActualSquare.BorderSizePixel = 1
+colorActualSquare.BorderColor3 = Color3.fromRGB(255, 255, 255)
+colorActualSquare.Parent = colorPreviewSquare
+
+local colorCorner = Instance.new("UICorner")
+colorCorner.CornerRadius = UDim.new(0, 4)
+colorCorner.Parent = colorActualSquare
+
+updateColorPreview() -- Первый вызов для установки начального цвета
+
+-- Toggle buttons for name and distance
+local toggleButtonsFrame = Instance.new("Frame")
+toggleButtonsFrame.Size = UDim2.new(1, 0, 0, 28)
+toggleButtonsFrame.BackgroundTransparency = 1
+toggleButtonsFrame.Parent = contentFrame
+
+local toggleButtonsLayout = Instance.new("UIListLayout")
+toggleButtonsLayout.FillDirection = Enum.FillDirection.Horizontal
+toggleButtonsLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+toggleButtonsLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+toggleButtonsLayout.Padding = UDim.new(0, 5)
+toggleButtonsLayout.Parent = toggleButtonsFrame
+
+local function createToggleButton(name, initialState, parentFrame)
+    local button = Instance.new("TextButton")
+    button.Name = name .. "Toggle"
+    button.Size = UDim2.new(0.45, 0, 1, 0)
+    button.BackgroundColor3 = initialState and Color3.fromRGB(50, 150, 50) or Color3.fromRGB(150, 50, 50)
+    button.TextColor3 = themes[currentTheme].Text
+    button.Text = name .. ": " .. (initialState and "ON" or "OFF")
+    button.TextSize = 12
+    button.Font = Enum.Font.GothamBold
+    button.ZIndex = 3
+    button.Parent = parentFrame
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 4)
+    corner.Parent = button
+
+    return button
+end
+
+local nameToggleButton = createToggleButton("Name", showName, toggleButtonsFrame)
+local distanceToggleButton = createToggleButton("Distance", showDistance, toggleButtonsFrame)
+
+nameToggleButton.MouseButton1Click:Connect(function()
+    showName = not showName
+    nameToggleButton.Text = "Name: " .. (showName and "ON" or "OFF")
+    nameToggleButton.BackgroundColor3 = showName and Color3.fromRGB(50, 150, 50) or Color3.fromRGB(150, 50, 50)
+    if #activeHighlights > 0 then
+        applyHighlighting() -- Reapply highlighting to update billboards
+    end
+end)
+
+distanceToggleButton.MouseButton1Click:Connect(function()
+    showDistance = not showDistance
+    distanceToggleButton.Text = "Distance: " .. (showDistance and "ON" or "OFF")
+    distanceToggleButton.BackgroundColor3 = showDistance and Color3.fromRGB(50, 150, 50) or Color3.fromRGB(150, 50, 50)
+    if #activeHighlights > 0 then
+        applyHighlighting() -- Reapply highlighting to update billboards
+    end
+end)
+
+local highlightButton = Instance.new("TextButton")
+highlightButton.Name = "HighlightButton"
+highlightButton.Size = UDim2.new(0.9, 0, 0, 28)
+highlightButton.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+highlightButton.TextColor3 = themes[currentTheme].Text
+highlightButton.Text = "Highlight"
+highlightButton.TextSize = 12
+highlightButton.Font = Enum.Font.GothamBold
+highlightButton.ZIndex = 3
+highlightButton.Parent = contentFrame
+
+local highlightButtonCorner = Instance.new("UICorner")
+highlightButtonCorner.CornerRadius = UDim.new(0, 4)
+highlightButtonCorner.Parent = highlightButton
+
+highlightButton.MouseButton1Click:Connect(function()
+    applyHighlighting()
+end)
+
+local removeHighlightButton = Instance.new("TextButton")
+removeHighlightButton.Name = "RemoveHighlightButton"
+removeHighlightButton.Size = UDim2.new(0.9, 0, 0, 28)
+removeHighlightButton.BackgroundColor3 = Color3.fromRGB(150, 50, 50)
+removeHighlightButton.TextColor3 = themes[currentTheme].Text
+removeHighlightButton.Text = "Clear Highlight"
+removeHighlightButton.TextSize = 12
+removeHighlightButton.Font = Enum.Font.GothamBold
+removeHighlightButton.ZIndex = 3
+removeHighlightButton.Parent = contentFrame
+
+local removeHighlightButtonCorner = Instance.new("UICorner")
+removeHighlightButtonCorner.CornerRadius = UDim.new(0, 4)
+removeHighlightButtonCorner.Parent = removeHighlightButton
+
+removeHighlightButton.MouseButton1Click:Connect(function()
+    cleanupExistingHighlights()
+end)
+
+-- Animation for header and Highlight button colors
 local colorTime = 0
+
 RunService.Heartbeat:Connect(function(deltaTime)
     colorTime = colorTime + deltaTime
+
+    local progress = math.min(colorTime / colorTransitionTime, 1) -- Ограничиваем прогресс от 0 до 1
+
+    local startColor = colorSequence[currentColorIndex]
+    
+    -- Вычисляем следующий индекс, чтобы цикл повторялся
+    local nextColorIndex = (currentColorIndex % #colorSequence) + 1 
+    local endColor = colorSequence[nextColorIndex]
+
+    -- Интерполируем (lerp) цвет
+    local lerpedColor = startColor:Lerp(endColor, progress)
+
+    -- Применяем к заголовку
+    if highlightTitleLabel and highlightTitleLabel.Parent then
+        highlightTitleLabel.TextColor3 = lerpedColor
+    end
+
+    -- Проверяем, завершен ли переход
     if colorTime >= colorTransitionTime then
-        colorTime = 0
-        currentColorIndex = currentColorIndex % #colorSequence + 1
-    end
-
-    local progress = colorTime / colorTransitionTime
-    local startIndex = currentColorIndex
-    local endIndex = (currentColorIndex % #colorSequence) + 1
-    local startColor = colorSequence[startIndex]
-    local endColor = colorSequence[endIndex]
-
-    local r = startColor.R + (endColor.R - startColor.R) * progress
-    local g = startColor.G + (endColor.G - startColor.G) * progress
-    local b = startColor.B + (endColor.B - startColor.B) * progress
-
-    local currentColor = Color3.new(r, g, b)
-    if flyTitleLabel then -- Use the global reference
-        flyTitleLabel.TextColor3 = currentColor
+        colorTime = 0 -- Сбрасываем время
+        currentColorIndex = nextColorIndex -- Переходим к следующему цвету
     end
 end)
-
--- Handle character spawning and respawning (Адаптировано)
-player.CharacterAdded:Connect(function(char)
-    character = char
-    humanoid = char:WaitForChild("Humanoid")
-    -- If GUI already exists (e.g. from previous character), clean up old one.
-    if player.PlayerGui:FindFirstChild(mainGUI.Name) then
-        player.PlayerGui:FindFirstChild(mainGUI.Name):Destroy()
-    end
-    -- Re-create GUI for new character
-    createFlyGUI()
-    stopFly() -- Ensure fly is off on new character
-end)
-
--- Initial GUI creation if character is already loaded when script starts
-if player.Character then
-    createFlyGUI()
-end
