@@ -438,7 +438,7 @@ local customButtons = {
     {
         name = "Fly Gui",
         func = function()
-            loadstring(game:HttpGet('https://pastefy.app/W26j7sNm/raw'))()
+            loadstring(game:HttpGet('https://raw.githubusercontent.com/GrowaGardenSimulator/dfg/refs/heads/main/fly.lua'))()
 
         end
     },
@@ -451,19 +451,19 @@ local customButtons = {
     {
         name = "Telekinesis",
         func = function()
-            loadstring(game:HttpGet("https://pastefy.app/mQLpv1rM/raw"))()
+            loadstring(game:HttpGet("https://raw.githubusercontent.com/GrowaGardenSimulator/dfg/refs/heads/main/Telekinesis.lua"))()
         end
     },
     {
         name = "Find part",
         func = function()
-            loadstring(game:HttpGet("https://pastefy.app/V72JxSPE/raw"))()
+            loadstring(game:HttpGet("https://raw.githubusercontent.com/GrowaGardenSimulator/dfg/refs/heads/main/find.lua"))()
         end
     },
     {
         name = "spectate [new!]",
         func = function()
-            loadstring(game:HttpGet("https://pastefy.app/OuhyZKgK/raw"))()
+            loadstring(game:HttpGet("https://raw.githubusercontent.com/GrowaGardenSimulator/dfg/refs/heads/main/spectate.lua"))()
         end
     }
 }
